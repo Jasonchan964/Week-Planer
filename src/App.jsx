@@ -120,9 +120,6 @@ const PRIORITY_LABEL = {
   low: '低',
 }
 
-/** 背景角落猫爪印布局（固定伪随机，离线稳定） */
-const SECTION_KITTY_ART = '/section-kitty-watermark.png'
-
 const PAW_BG_LAYOUT = [
   { t: 5, l: 3, rot: -22, s: 0.9, op: 0.09 },
   { t: 12, r: 6, rot: 35, s: 1.1, op: 0.06 },
@@ -139,19 +136,6 @@ const PAW_BG_LAYOUT = [
   { t: 92, r: 30, rot: 28, s: 0.75, op: 0.08 },
   { t: 48, l: 12, rot: 5, s: 1, op: 0.07 },
 ]
-
-/** 板块内淡化 Kitty 插画（空状态用；白底 + multiply 融入奶色卡片） */
-function KittySectionArt({ className = '' }) {
-  return (
-    <img
-      src={SECTION_KITTY_ART}
-      alt=""
-      draggable={false}
-      aria-hidden
-      className={`mix-blend-multiply opacity-[0.34] saturate-[0.5] brightness-105 contrast-95 ${className}`}
-    />
-  )
-}
 
 function PawMiniSvg({ className }) {
   return (
@@ -688,8 +672,8 @@ export default function App() {
               >
                 {/* 白底插画：multiply + 与页面同底色容器，视觉上抠除白底 */}
                 <img
-                  src="/ragdoll-cat-crown.png"
-                  alt="戴着小皇冠的猫咪"
+                  src="/section-kitty-watermark.png"
+                  alt="小猫"
                   width={96}
                   height={96}
                   draggable={false}
@@ -769,8 +753,7 @@ export default function App() {
                 </div>
 
                 {tasks.length === 0 ? (
-                  <div className="mt-6 flex flex-col items-center justify-center gap-2 py-2 text-center">
-                    <KittySectionArt className="h-24 w-24 object-contain sm:h-28 sm:w-28" />
+                  <div className="mt-6 flex flex-col items-center justify-center py-3 text-center">
                     <p className="text-xs leading-relaxed text-stone-400">
                       主人还没给我布置任务喵~
                     </p>
