@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@keyframes paw-flash {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.45) rotate(-8deg);
+  }
+  25% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.05) rotate(4deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.75) rotate(0deg);
+  }
+}
+
+@layer utilities {
+  .animate-paw-flash {
+    animation: paw-flash 0.72s ease-out forwards;
+  }
+}
