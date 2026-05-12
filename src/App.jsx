@@ -120,23 +120,6 @@ const PRIORITY_LABEL = {
   low: '低',
 }
 
-const PAW_BG_LAYOUT = [
-  { t: 5, l: 3, rot: -22, s: 0.9, op: 0.09 },
-  { t: 12, r: 6, rot: 35, s: 1.1, op: 0.06 },
-  { t: 28, l: 1, rot: 12, s: 0.75, op: 0.08 },
-  { t: 42, r: 2, rot: -28, s: 1, op: 0.07 },
-  { t: 62, l: 8, rot: 18, s: 0.85, op: 0.05 },
-  { t: 78, r: 10, rot: -15, s: 1.15, op: 0.1 },
-  { t: 88, l: 18, rot: 40, s: 0.7, op: 0.06 },
-  { t: 18, r: 22, rot: -8, s: 0.95, op: 0.08 },
-  { t: 52, r: 4, rot: 22, s: 0.8, op: 0.07 },
-  { t: 72, l: 28, rot: -35, s: 1.05, op: 0.05 },
-  { t: 8, l: 42, rot: 8, s: 0.65, op: 0.1 },
-  { t: 35, l: 36, rot: -18, s: 0.9, op: 0.06 },
-  { t: 92, r: 30, rot: 28, s: 0.75, op: 0.08 },
-  { t: 48, l: 12, rot: 5, s: 1, op: 0.07 },
-]
-
 function PawMiniSvg({ className }) {
   return (
     <svg
@@ -153,38 +136,6 @@ function PawMiniSvg({ className }) {
       <circle cx="9" cy="12" r="2.1" opacity="0.85" />
       <circle cx="15" cy="12" r="2.1" opacity="0.85" />
     </svg>
-  )
-}
-
-function CatPawBackdrop() {
-  return (
-    <div
-      className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
-      aria-hidden
-    >
-      {PAW_BG_LAYOUT.map((p, i) => (
-        <div
-          key={i}
-          className="absolute"
-          style={{
-            top: `${p.t}%`,
-            left: p.l !== undefined ? `${p.l}%` : undefined,
-            right: p.r !== undefined ? `${p.r}%` : undefined,
-            opacity: p.op,
-            transform: `rotate(${p.rot}deg) scale(${p.s})`,
-          }}
-        >
-          <img
-            src="/paw-print-silhouette.png"
-            alt=""
-            width={40}
-            height={40}
-            draggable={false}
-            className="h-10 w-10 select-none object-contain sm:h-11 sm:w-11"
-          />
-        </div>
-      ))}
-    </div>
   )
 }
 
@@ -618,8 +569,7 @@ export default function App() {
     'flex flex-col rounded-3xl border bg-white/95 p-6 shadow-sm backdrop-blur-[2px] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.995]'
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-[#FFFDF9] text-gray-900 antialiased">
-      <CatPawBackdrop />
+    <div className="relative min-h-screen overflow-x-hidden bg-[#FFF6F9] text-gray-900 antialiased">
       <div className="relative z-10 mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <header className="relative mb-8">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -667,7 +617,7 @@ export default function App() {
           <div className="mx-auto mt-6 flex max-w-2xl flex-col items-center gap-4 sm:flex-row sm:items-center">
             <div className="relative shrink-0">
               <div
-                className="flex items-center justify-center rounded-2xl bg-[#FFFDF9] p-1.5 shadow-sm ring-1 ring-stone-100/70"
+                className="flex items-center justify-center rounded-2xl bg-[#FFF6F9] p-1.5 shadow-sm ring-1 ring-stone-100/70"
                 style={{ isolation: 'isolate' }}
               >
                 {/* 白底插画：multiply + 与页面同底色容器，视觉上抠除白底 */}
@@ -715,7 +665,7 @@ export default function App() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <span
-                      className={`flex h-11 w-11 items-center justify-center rounded-2xl bg-[#FFFDF9]/90 ${iconColor} ring-1 ring-stone-200/60 transition-all hover:scale-105 active:scale-95`}
+                      className={`flex h-11 w-11 items-center justify-center rounded-2xl bg-[#FFF6F9]/90 ${iconColor} ring-1 ring-stone-200/60 transition-all hover:scale-105 active:scale-95`}
                     >
                       <Icon className="h-5 w-5" strokeWidth={1.75} />
                     </span>
@@ -766,7 +716,7 @@ export default function App() {
                         <li
                           key={task.id}
                           className={[
-                            'group relative flex items-start gap-2 rounded-2xl border border-transparent bg-[#FFFDF9]/80 px-3 py-2.5 transition-all duration-200 ease-out',
+                            'group relative flex items-start gap-2 rounded-2xl border border-transparent bg-[#FFF6F9]/80 px-3 py-2.5 transition-all duration-200 ease-out',
                             isRemoving
                               ? 'pointer-events-none scale-95 opacity-0'
                               : 'opacity-100',
@@ -808,7 +758,7 @@ export default function App() {
                               >
                                 <span
                                   className={[
-                                    'inline-block h-2.5 w-2.5 rounded-full ring-2 ring-offset-1 ring-offset-[#FFFDF9]',
+                                    'inline-block h-2.5 w-2.5 rounded-full ring-2 ring-offset-1 ring-offset-[#FFF6F9]',
                                     PRIORITY_DOT[safePriority(task.priority)],
                                     PRIORITY_RING[safePriority(task.priority)],
                                   ].join(' ')}
@@ -912,7 +862,7 @@ export default function App() {
             readOnly={isReadOnly}
             onChange={(e) => setSummary(e.target.value)}
             rows={6}
-            className="mt-4 w-full resize-y rounded-2xl border border-stone-200/90 bg-[#FFFDF9]/50 px-4 py-3 text-sm leading-relaxed text-stone-800 outline-none transition-all placeholder:text-stone-400 focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-100 read-only:cursor-default read-only:bg-stone-50 read-only:text-stone-700"
+            className="mt-4 w-full resize-y rounded-2xl border border-stone-200/90 bg-[#FFF6F9]/50 px-4 py-3 text-sm leading-relaxed text-stone-800 outline-none transition-all placeholder:text-stone-400 focus:border-amber-300 focus:bg-white focus:ring-2 focus:ring-amber-100 read-only:cursor-default read-only:bg-stone-50 read-only:text-stone-700"
             placeholder={
               isReadOnly ? '' : '本周做得好的地方、需要改进的节奏、想对自己说的话……'
             }
