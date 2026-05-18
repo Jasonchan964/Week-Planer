@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createClient } from '@supabase/supabase-js'
 import {
   ArrowDownWideNarrow,
   BookOpen,
@@ -6,14 +7,24 @@ import {
   Gamepad2,
   HeartPulse,
   Home,
+  Loader2,
   Rocket,
   Trash2,
   Users,
   Wallet,
+  X,
 } from 'lucide-react'
+
+// ─── Supabase ───────────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://bymywnsdmfdvrgxdbpkq.supabase.co'
+const SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5bXl3bnNkbWZkdnJneGRicGtxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNjk1NDYsImV4cCI6MjA5NDY0NTU0Nn0.nWKCB8NKr68qbjJ7fNrbigjHFaC2RpfreUC4vqBdx54'
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 const STORAGE_KEY = 'life-week-planner-weeks-v2'
 const LEGACY_STORAGE_KEY = 'life-dimensions-week-planner'
+const SUMMARY_SYNC_DEBOUNCE_MS = 1000
 
 const WEEKDAY_LABELS = [
   '星期日',
@@ -101,7 +112,6 @@ const LEGACY_ID_TO_TITLE = {
 
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 }
 
-/** 红黄绿：高红、中黄、低绿 */
 const PRIORITY_DOT = {
   high: 'bg-red-500',
   medium: 'bg-amber-400',
@@ -119,6 +129,10 @@ const PRIORITY_LABEL = {
   medium: '中',
   low: '低',
 }
+
+const btnSquish = 'transition-all duration-200 active:scale-95 hover:scale-[1.02]'
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function PawMiniSvg({ className }) {
   return (
@@ -139,11 +153,16 @@ function PawMiniSvg({ className }) {
   )
 }
 
+function emailPrefix(email) {
+  if (!email) return '喵友'
+  const at = email.indexOf('@')
+  return at > 0 ? email.slice(0, at) : email
+}
+
 function toLocalDateOnly(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate())
 }
 
-/** 自然周：周一为起点 */
 function startOfWeekMonday(d) {
   const x = toLocalDateOnly(d)
   const day = x.getDay()
@@ -211,14 +230,17 @@ function normalizeTask(raw) {
 
 function sanitizeWeekRecord(raw, weekKey) {
   const tasks = emptyTasksMap()
-  const src = raw && typeof raw === 'object' && raw.tasks && typeof raw.tasks === 'object' ? raw.tasks : {}
+  const src =
+    raw && typeof raw === 'object' && raw.tasks && typeof raw.tasks === 'object'
+      ? raw.tasks
+      : {}
   for (const title of DIMENSION_TITLES) {
     if (Array.isArray(src[title])) {
       tasks[title] = src[title].map(normalizeTask).filter(Boolean)
     }
   }
   const summary = typeof raw?.summary === 'string' ? raw.summary : ''
-  let weekStart =
+  const weekStart =
     typeof raw?.weekStart === 'number' && Number.isFinite(raw.weekStart)
       ? raw.weekStart
       : parseWeekKeyStartMs(weekKey)
@@ -232,6 +254,14 @@ function sanitizeWeeksMap(weeks) {
     next[key] = sanitizeWeekRecord(weeks[key], key)
   }
   return next
+}
+
+function weekRecordToCloudData(weekRecord) {
+  return {
+    tasks: weekRecord.tasks,
+    summary: weekRecord.summary,
+    weekStart: weekRecord.weekStart,
+  }
 }
 
 function sortTasksForSection(tasks) {
@@ -340,7 +370,197 @@ function computeBootState() {
   return cachedBoot
 }
 
-const btnSquish = 'transition-all duration-200 active:scale-95'
+// ─── Supabase data layer ────────────────────────────────────────────────────
+
+async function fetchWeekFromCloud(userId, weekKey) {
+  const { data, error } = await supabase
+    .from('user_plans')
+    .select('data')
+    .eq('user_id', userId)
+    .eq('week_range', weekKey)
+    .maybeSingle()
+  if (error) throw error
+  if (!data?.data) return null
+  return sanitizeWeekRecord(data.data, weekKey)
+}
+
+async function fetchAllWeeksFromCloud(userId) {
+  const { data, error } = await supabase
+    .from('user_plans')
+    .select('week_range, data')
+    .eq('user_id', userId)
+  if (error) throw error
+  const map = {}
+  for (const row of data ?? []) {
+    if (row.week_range && row.data) {
+      map[row.week_range] = sanitizeWeekRecord(row.data, row.week_range)
+    }
+  }
+  return map
+}
+
+async function upsertWeekToCloud(userId, weekKey, weekRecord) {
+  const { error } = await supabase.from('user_plans').upsert(
+    {
+      user_id: userId,
+      week_range: weekKey,
+      data: weekRecordToCloudData(weekRecord),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,week_range' },
+  )
+  if (error) throw error
+}
+
+async function upsertAllWeeksToCloud(userId, weeksMap) {
+  const rows = Object.entries(weeksMap).map(([weekKey, record]) => ({
+    user_id: userId,
+    week_range: weekKey,
+    data: weekRecordToCloudData(record),
+    updated_at: new Date().toISOString(),
+  }))
+  if (rows.length === 0) return
+  const { error } = await supabase.from('user_plans').upsert(rows, {
+    onConflict: 'user_id,week_range',
+  })
+  if (error) throw error
+}
+
+function mergeLocalAndCloud(localWeeks, cloudWeeks) {
+  const merged = { ...sanitizeWeeksMap(cloudWeeks) }
+  for (const [key, record] of Object.entries(sanitizeWeeksMap(localWeeks))) {
+    merged[key] = record
+  }
+  return merged
+}
+
+// ─── Auth Modal ─────────────────────────────────────────────────────────────
+
+function AuthModal({
+  open,
+  mode,
+  email,
+  password,
+  error,
+  busy,
+  onClose,
+  onModeChange,
+  onEmailChange,
+  onPasswordChange,
+  onSubmit,
+}) {
+  if (!open) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="auth-modal-title"
+    >
+      <button
+        type="button"
+        className="absolute inset-0 bg-stone-900/30 backdrop-blur-sm"
+        onClick={onClose}
+        aria-label="关闭"
+      />
+      <div
+        className="relative w-full max-w-md rounded-3xl border border-rose-100/90 bg-[#FFFBFC] p-6 shadow-xl shadow-rose-100/50 sm:p-8"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className={`absolute right-4 top-4 rounded-full p-1.5 text-stone-400 hover:bg-rose-50 hover:text-stone-600 ${btnSquish}`}
+          aria-label="关闭"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="mb-6 text-center">
+          <span className="text-3xl" aria-hidden>
+            🐾
+          </span>
+          <h2
+            id="auth-modal-title"
+            className="mt-2 text-xl font-semibold text-stone-800"
+          >
+            {mode === 'login' ? '欢迎回来喵' : '加入猫咪周计划'}
+          </h2>
+          <p className="mt-1 text-sm text-stone-500">
+            {mode === 'login'
+              ? '登录后，周计划将同步到云端'
+              : '注册账号，多端同步你的成长记录'}
+          </p>
+        </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            onSubmit()
+          }}
+          className="space-y-4"
+        >
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-stone-500">
+              邮箱
+            </label>
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => onEmailChange(e.target.value)}
+              placeholder="you@example.com"
+              className="w-full rounded-2xl border border-stone-200/90 bg-white px-4 py-3 text-sm text-stone-800 outline-none transition-all focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-stone-500">
+              密码
+            </label>
+            <input
+              type="password"
+              required
+              minLength={6}
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              value={password}
+              onChange={(e) => onPasswordChange(e.target.value)}
+              placeholder="至少 6 位"
+              className="w-full rounded-2xl border border-stone-200/90 bg-white px-4 py-3 text-sm text-stone-800 outline-none transition-all focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+            />
+          </div>
+
+          {error ? (
+            <p className="rounded-2xl bg-rose-50 px-3 py-2 text-center text-sm text-rose-600">
+              {error}
+            </p>
+          ) : null}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className={`flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-amber-400 to-orange-400 px-6 py-3 text-sm font-semibold text-white shadow-md shadow-amber-200/60 disabled:opacity-60 ${btnSquish}`}
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {mode === 'login' ? '登录' : '注册'}
+          </button>
+        </form>
+
+        <p className="mt-5 text-center text-sm text-stone-500">
+          {mode === 'login' ? '还没有账号？' : '已有账号？'}
+          <button
+            type="button"
+            onClick={() => onModeChange(mode === 'login' ? 'signup' : 'login')}
+            className={`ml-1 font-medium text-amber-600 hover:text-amber-700 ${btnSquish}`}
+          >
+            {mode === 'login' ? '去注册' : '去登录'}
+          </button>
+        </p>
+      </div>
+    </div>
+  )
+}
 
 export default function App() {
   const [weeks, setWeeks] = useState(() => cloneWeeks(computeBootState().weeks))
@@ -355,12 +575,96 @@ export default function App() {
     Object.fromEntries(DIMENSION_TITLES.map((t) => [t, 'medium'])),
   )
   const [removingIds, setRemovingIds] = useState(() => new Set())
-  /** 完成任务时爪印动画 tick，按 taskId 记录 */
   const [pawAnim, setPawAnim] = useState({})
+
+  const [authUser, setAuthUser] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [authMode, setAuthMode] = useState('login')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authBusy, setAuthBusy] = useState(false)
+  const [cloudSyncing, setCloudSyncing] = useState(false)
+  const [weekLoading, setWeekLoading] = useState(false)
+
+  const authUserRef = useRef(null)
+  const weeksRef = useRef(weeks)
+  const loginMergeDoneRef = useRef(false)
+
+  useEffect(() => {
+    authUserRef.current = authUser
+  }, [authUser])
+
+  useEffect(() => {
+    weeksRef.current = weeks
+  }, [weeks])
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 1000)
     return () => window.clearInterval(id)
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!mounted) return
+      setAuthUser(session?.user ?? null)
+      setAuthReady(true)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUser(session?.user ?? null)
+      if (!session?.user) {
+        loginMergeDoneRef.current = false
+      }
+    })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  const performLoginMerge = useCallback(async (user) => {
+    setCloudSyncing(true)
+    try {
+      const localWeeks = weeksRef.current
+      const cloudWeeks = await fetchAllWeeksFromCloud(user.id)
+      const merged = mergeLocalAndCloud(localWeeks, cloudWeeks)
+      const nowDate = new Date()
+      const currentKey = getWeekRangeKey(nowDate)
+      if (!merged[currentKey]) {
+        merged[currentKey] = createEmptyWeekPayload(nowDate)
+      }
+      const final = sanitizeWeeksMap(merged)
+      setWeeks(cloneWeeks(final))
+      persistStore(final)
+      await upsertAllWeeksToCloud(user.id, final)
+    } catch (err) {
+      console.error('登录同步失败', err)
+    } finally {
+      setCloudSyncing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authReady || !authUser || loginMergeDoneRef.current) return
+    loginMergeDoneRef.current = true
+    performLoginMerge(authUser)
+  }, [authReady, authUser, performLoginMerge])
+
+  const syncWeekToCloud = useCallback(async (weekKey, weekRecord) => {
+    const user = authUserRef.current
+    if (!user || !weekRecord) return
+    try {
+      await upsertWeekToCloud(user.id, weekKey, weekRecord)
+    } catch (err) {
+      console.error('云端同步失败', err)
+    }
   }, [])
 
   const currentWeekKey = getWeekRangeKey(now)
@@ -431,15 +735,91 @@ export default function App() {
     return map
   }, [tasksMap])
 
-  const updateWeekData = useCallback((updater) => {
-    if (isReadOnly) return
-    setWeeks((prev) => {
-      const cur = prev[effectiveWeekKey]
-      if (!cur) return prev
-      const nextRecord = updater(cur)
-      return { ...prev, [effectiveWeekKey]: nextRecord }
-    })
-  }, [effectiveWeekKey, isReadOnly])
+  const updateWeekData = useCallback(
+    (updater, { cloudSync = true } = {}) => {
+      if (isReadOnly) return
+      setWeeks((prev) => {
+        const cur = prev[effectiveWeekKey]
+        if (!cur) return prev
+        const nextRecord = updater(cur)
+        const next = { ...prev, [effectiveWeekKey]: nextRecord }
+        if (cloudSync && authUserRef.current) {
+          upsertWeekToCloud(authUserRef.current.id, effectiveWeekKey, nextRecord).catch(
+            console.error,
+          )
+        }
+        return next
+      })
+    },
+    [effectiveWeekKey, isReadOnly],
+  )
+
+  useEffect(() => {
+    if (!authUser || isReadOnly) return
+    const t = window.setTimeout(() => {
+      const record = weeksRef.current[effectiveWeekKey]
+      if (record) syncWeekToCloud(effectiveWeekKey, record)
+    }, SUMMARY_SYNC_DEBOUNCE_MS)
+    return () => window.clearTimeout(t)
+  }, [weekData.summary, authUser, effectiveWeekKey, isReadOnly, syncWeekToCloud])
+
+  const handleWeekSelect = useCallback(
+    async (weekKey) => {
+      setSelectedWeekKey(weekKey)
+      const user = authUserRef.current
+      if (!user) return
+      setWeekLoading(true)
+      try {
+        const remote = await fetchWeekFromCloud(user.id, weekKey)
+        if (remote) {
+          setWeeks((prev) => ({ ...prev, [weekKey]: remote }))
+        }
+      } catch (err) {
+        console.error('拉取周数据失败', err)
+      } finally {
+        setWeekLoading(false)
+      }
+    },
+    [],
+  )
+
+  const handleAuthSubmit = useCallback(async () => {
+    setAuthError('')
+    setAuthBusy(true)
+    try {
+      if (authMode === 'signup') {
+        const { error } = await supabase.auth.signUp({
+          email: authEmail.trim(),
+          password: authPassword,
+        })
+        if (error) throw error
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: authEmail.trim(),
+          password: authPassword,
+        })
+        if (error) throw error
+      }
+      setAuthModalOpen(false)
+      setAuthPassword('')
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (user) {
+        loginMergeDoneRef.current = true
+        await performLoginMerge(user)
+      }
+    } catch (err) {
+      setAuthError(err?.message ?? '认证失败，请稍后再试')
+    } finally {
+      setAuthBusy(false)
+    }
+  }, [authEmail, authMode, authPassword, performLoginMerge])
+
+  const handleSignOut = useCallback(async () => {
+    await supabase.auth.signOut()
+    loginMergeDoneRef.current = false
+  }, [])
 
   const addTask = useCallback(
     (title) => {
@@ -560,7 +940,7 @@ export default function App() {
   const setSummary = useCallback(
     (value) => {
       if (isReadOnly) return
-      updateWeekData((w) => ({ ...w, summary: value }))
+      updateWeekData((w) => ({ ...w, summary: value }), { cloudSync: false })
     },
     [isReadOnly, updateWeekData],
   )
@@ -570,8 +950,69 @@ export default function App() {
 
   return (
     <div className="relative min-h-screen overflow-x-hidden bg-[#FFF6F9] text-gray-900 antialiased">
+      <AuthModal
+        open={authModalOpen}
+        mode={authMode}
+        email={authEmail}
+        password={authPassword}
+        error={authError}
+        busy={authBusy}
+        onClose={() => {
+          setAuthModalOpen(false)
+          setAuthError('')
+        }}
+        onModeChange={(m) => {
+          setAuthMode(m)
+          setAuthError('')
+        }}
+        onEmailChange={setAuthEmail}
+        onPasswordChange={setAuthPassword}
+        onSubmit={handleAuthSubmit}
+      />
+
       <div className="relative z-10 mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <header className="relative mb-8">
+          <div className="mb-4 flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:justify-end">
+            {authReady ? (
+              authUser ? (
+                <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+                  <span className="rounded-full border border-amber-100/90 bg-white/90 px-4 py-2 text-sm text-stone-700 shadow-sm">
+                    🐱{' '}
+                    <span className="font-medium text-amber-700">
+                      {emailPrefix(authUser.email)}
+                    </span>{' '}
+                    欢迎回来
+                  </span>
+                  {cloudSyncing ? (
+                    <span className="inline-flex items-center gap-1 text-xs text-stone-400">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      同步中
+                    </span>
+                  ) : (
+                    <span className="text-xs text-emerald-600/90">云端已连接</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className={`rounded-full border border-stone-200/90 bg-white/90 px-4 py-2 text-sm text-stone-600 shadow-sm hover:border-rose-200 hover:text-rose-600 ${btnSquish}`}
+                  >
+                    退出
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setAuthModalOpen(true)}
+                  className={`self-end rounded-full border border-amber-200/90 bg-gradient-to-r from-amber-50 to-orange-50 px-5 py-2.5 text-sm font-medium text-amber-800 shadow-sm hover:from-amber-100 hover:to-orange-100 ${btnSquish}`}
+                >
+                  登录同步数据
+                </button>
+              )
+            ) : (
+              <span className="self-end text-xs text-stone-400">加载账号…</span>
+            )}
+          </div>
+
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="text-center sm:text-left">
               <p className="text-sm font-medium tabular-nums text-stone-500">
@@ -586,17 +1027,24 @@ export default function App() {
               </h1>
               {isReadOnly ? (
                 <p className="mt-2 text-sm text-stone-500">
-                  正在查看：<span className="font-medium text-stone-700">{effectiveWeekKey}</span>
+                  正在查看：
+                  <span className="font-medium text-stone-700">{effectiveWeekKey}</span>
+                  {weekLoading ? (
+                    <Loader2 className="ml-1 inline h-3.5 w-3.5 animate-spin text-stone-400" />
+                  ) : null}
                 </p>
               ) : null}
             </div>
 
             <div className="flex flex-col items-stretch gap-2 sm:min-w-[280px] sm:items-end">
-              <label className="text-xs font-medium text-stone-400 sm:text-right">历史周次</label>
+              <label className="text-xs font-medium text-stone-400 sm:text-right">
+                历史周次
+              </label>
               <select
                 value={effectiveWeekKey}
-                onChange={(e) => setSelectedWeekKey(e.target.value)}
-                className={`w-full rounded-2xl border border-stone-200/90 bg-white/90 px-3 py-2.5 text-sm text-stone-800 shadow-sm outline-none transition-all hover:border-amber-200 focus:border-amber-300 focus:ring-2 focus:ring-amber-100 sm:max-w-xs sm:text-right ${btnSquish}`}
+                onChange={(e) => handleWeekSelect(e.target.value)}
+                disabled={weekLoading}
+                className={`w-full rounded-2xl border border-stone-200/90 bg-white/90 px-3 py-2.5 text-sm text-stone-800 shadow-sm outline-none transition-all hover:border-amber-200 focus:border-amber-300 focus:ring-2 focus:ring-amber-100 disabled:opacity-60 sm:max-w-xs sm:text-right ${btnSquish}`}
               >
                 {sortedWeekKeys.map((key) => (
                   <option key={key} value={key}>
@@ -620,7 +1068,6 @@ export default function App() {
                 className="flex items-center justify-center rounded-2xl bg-[#FFF6F9] p-1.5 shadow-sm ring-1 ring-stone-100/70"
                 style={{ isolation: 'isolate' }}
               >
-                {/* 白底插画：multiply + 与页面同底色容器，视觉上抠除白底 */}
                 <img
                   src="/section-kitty-watermark.png"
                   alt="小猫"
@@ -850,11 +1297,15 @@ export default function App() {
               <p className="text-sm text-stone-500">
                 {isReadOnly
                   ? '以下为该周已保存的复盘内容。'
-                  : '记录本周感受与下周调整，内容会自动保存到本地。'}
+                  : authUser
+                    ? '记录本周感受，内容会自动保存到本地与云端。'
+                    : '记录本周感受与下周调整，内容会自动保存到本地。'}
               </p>
             </div>
             {!isReadOnly ? (
-              <span className="text-xs text-stone-400">已开启本地自动保存</span>
+              <span className="text-xs text-stone-400">
+                {authUser ? '本地 + 云端自动保存' : '已开启本地自动保存'}
+              </span>
             ) : null}
           </div>
           <textarea
